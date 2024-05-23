@@ -6,12 +6,9 @@
 use simple_logger;
 use std::net::UdpSocket;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-#[allow(dead_code)]
-const POOL_NTP_ADDR: &str = "pool.ntp.org:123";
-#[allow(dead_code)]
-const GOOGLE_NTP_ADDR: &str = "time.google.com:123";
+const POOL_NTP_ADDR: &str = "ntp.nict.jp:123";
 
 fn main() {
     #[cfg(feature = "log")]
@@ -21,26 +18,44 @@ fn main() {
         simple_logger::init_with_level(log::Level::Info).unwrap();
     }
 
-    for _ in 0..5 {
+    let ntp_time = || {
         let socket =
             UdpSocket::bind("0.0.0.0:0").expect("Unable to crate UDP socket");
         socket
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("Unable to set UDP socket read timeout");
+        sntpc::simple_get_time(POOL_NTP_ADDR, socket)
+    };
 
-        let result = sntpc::simple_get_time(POOL_NTP_ADDR, socket);
+    let origin = Instant::now();
+    let origin_ntp = ntp_time().unwrap().sec();
+
+    for _ in 0..60 {
+        let before = Instant::now();
+        let result = ntp_time();
+        let after = Instant::now();
+
+        let calc = |t: Instant| {
+            let x = (t - origin).as_nanos();
+            let base = 10u128.pow(9);
+            format!("{}.{:09}", x / base, x % base)
+        };
 
         match result {
             Ok(time) => {
                 assert_ne!(time.sec(), 0);
-                let seconds = time.sec();
+                let seconds = time.sec() - origin_ntp;
                 let microseconds =
                     time.sec_fraction() as u64 * 1_000_000 / u32::MAX as u64;
-                println!("Got time: {}.{}", seconds, microseconds);
+                println!(
+                    "{seconds}.{microseconds:06}\t{}\t{}",
+                    calc(before),
+                    calc(after)
+                );
             }
             Err(err) => println!("Err: {:?}", err),
         }
 
-        thread::sleep(Duration::new(15, 0));
+        thread::sleep(Duration::new(1, 0));
     }
 }
